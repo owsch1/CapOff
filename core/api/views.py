@@ -5,24 +5,20 @@ from rest_framework import status
 from django.db.models import Count, F
 from django.shortcuts import get_object_or_404
 
-from .models import Product, Basket, Favorite, Banner, Brand
+from .models import (
+    Product, Basket, Favorite, Banner, Brand,
+    ProductImage, Storage, Size,   # ⬅ Neu für Detail-Logik
+)
 from .serializers import (
     ProductSerializer, ProductListSerializer,
     BasketSerializer, FavoriteSerializer,
-    BannerSerializer, BrandSerializer
+    BannerSerializer, BrandSerializer,
+    ProductDetailSerializer,        # ⬅ Neu: Detail-Serializer
 )
 from .choices import BannerLocation
 
 
 class HomeIndexAPIView(APIView):
-    """
-    Main:
-      - head_banner (1x)
-      - brands ()
-      - bestsellers
-      - discounts
-    Limits via Query: ?brands=4&best=12&disc=12
-    """
     permission_classes = [AllowAny]
 
     def get(self, request):
@@ -46,6 +42,7 @@ class HomeIndexAPIView(APIView):
             "discounts":   ProductListSerializer(discounts, many=True, context={'request': request}).data,
         }, status=status.HTTP_200_OK)
 
+
 # ---------- PRODUCTS ----------
 
 class ProductListCreateAPIView(APIView):
@@ -59,7 +56,7 @@ class ProductListCreateAPIView(APIView):
         qs = (Product.objects
               .filter(is_active=True)
               .order_by('-created_at')
-              .prefetch_related('brands'))
+              .prefetch_related('brands', 'images'))  # ⬅ Galerie für List-Teaser bereits geprefetched
 
         category = request.query_params.get('category')
         if category:
@@ -90,15 +87,22 @@ class ProductDetailAPIView(APIView):
     """
     GET/PUT/PATCH/DELETE für einzelnes Produkt
     """
-    permission_classes = [AllowAny]  # für PUT/DELETE ggf. IsAdminUser
+    permission_classes = [AllowAny]
 
     def get_object(self, pk):
-        return get_object_or_404(Product.objects.prefetch_related('brands'), pk=pk)
+        # ⬅ Für Detail: Brands, Galerie-Bilder und Lager (mit Size) in einem Schlag laden
+        return get_object_or_404(
+            Product.objects
+                   .filter(is_active=True)
+                   .prefetch_related('brands', 'images', 'stocks__size'),
+            pk=pk
+        )
 
     def get(self, request, pk):
         product = self.get_object(pk)
+        # ⬅ Verwende den Detail-Serializer (liefert gallery, sizes, similar)
         return Response(
-            ProductSerializer(product, context={'request': request}).data,
+            ProductDetailSerializer(product, context={'request': request}).data,
             status=status.HTTP_200_OK
         )
 
@@ -191,11 +195,10 @@ class BasketAPIView(APIView):
         return Response({'detail': 'Removed from basket'}, status=status.HTTP_200_OK)
 
 
-# ---------- HOMEPAGE BLOCS (Choices genutzt) ----------
+# ---------- HOMEPAGE BLOCS ----------
 
 class HomeHeadBannerAPIView(APIView):
     permission_classes = [AllowAny]
-
     def get(self, request):
         qs = Banner.objects.filter(is_active=True, location=BannerLocation.HEAD).order_by('-id')[:1]
         return Response(BannerSerializer(qs, many=True, context={'request': request}).data)
@@ -203,7 +206,6 @@ class HomeHeadBannerAPIView(APIView):
 
 class HomeMiddleBannersAPIView(APIView):
     permission_classes = [AllowAny]
-
     def get(self, request):
         try:
             limit = int(request.query_params.get('limit', 10))
@@ -215,7 +217,6 @@ class HomeMiddleBannersAPIView(APIView):
 
 class HomeCatalogBannersAPIView(APIView):
     permission_classes = [AllowAny]
-
     def get(self, request):
         try:
             limit = int(request.query_params.get('limit', 10))
@@ -227,7 +228,6 @@ class HomeCatalogBannersAPIView(APIView):
 
 class PopularBrandsAPIView(APIView):
     permission_classes = [AllowAny]
-
     def get(self, request):
         try:
             limit = int(request.query_params.get('limit', 4))
@@ -241,7 +241,6 @@ class PopularBrandsAPIView(APIView):
 
 class BestsellerProductsAPIView(APIView):
     permission_classes = [AllowAny]
-
     def get(self, request):
         try:
             limit = int(request.query_params.get('limit', 12))
@@ -255,7 +254,6 @@ class BestsellerProductsAPIView(APIView):
 
 class DiscountedProductsAPIView(APIView):
     permission_classes = [AllowAny]
-
     def get(self, request):
         try:
             limit = int(request.query_params.get('limit', 12))
@@ -266,7 +264,6 @@ class DiscountedProductsAPIView(APIView):
               .annotate(discount_amount=F('old_price') - F('new_price'))
               .order_by('-discount_amount', '-created_at')[:limit])
         return Response(ProductListSerializer(qs, many=True, context={'request': request}).data)
-
 
 
 
